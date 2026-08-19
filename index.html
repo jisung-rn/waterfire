@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>물불게임 - Stage 1</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background-color: #111;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+            user-select: none;
+        }
+        h1 { margin-bottom: 10px; font-size: 20px; color: #f39c12; }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        canvas { background-color: #222; display: block; }
+        
+        /* Mobile / On-screen Controls */
+        .controls-container {
+            display: flex;
+            justify-content: space-between;
+            width: 800px;
+            max-width: 100vw;
+            margin-top: 15px;
+            padding: 0 10px;
+        }
+        .btn-group { display: flex; gap: 5px; }
+        .btn {
+            width: 45px;
+            height: 45px;
+            background: rgba(255, 255, 255, 0.15);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            color: white;
+            font-weight: bold;
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            touch-action: manipulation;
+        }
+        .btn:active { background: rgba(255, 255, 255, 0.4); }
+        .btn-fire { border-color: #ff4757; color: #ff4757; }
+        .btn-water { border-color: #1e90ff; color: #1e90ff; }
+        .info {
+            margin-top: 10px;
+            font-size: 13px;
+            color: #aaa;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>🔥 물불게임 Stage 1 💧</h1>
+    <div id="game-container">
+        <canvas id="canvas" width="800" height="450"></canvas>
+    </div>
+
+    <!-- 모바일 / 화면 터치 조작부 -->
+    <div class="controls-container">
+        <div class="btn-group">
+            <div class="btn btn-fire" id="btn-fire-left">A</div>
+            <div class="btn btn-fire" id="btn-fire-up">W</div>
+            <div class="btn btn-fire" id="btn-fire-right">D</div>
+        </div>
+        <div class="btn-group">
+            <div class="btn btn-water" id="btn-water-left">←</div>
+            <div class="btn btn-water" id="btn-water-up">↑</div>
+            <div class="btn btn-water" id="btn-water-right">→</div>
+        </div>
+    </div>
+
+    <div class="info">
+        🔥 Fireboy: W, A, D | 💧 Watergirl: 방향키 (↑, ←, →)<br>
+        모든 캐릭터가 각자의 문에 도달하면 클리어!
+    </div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+const GRAVITY = 0.5;
+
+// 입력 키 상태 관리
+const keys = {};
+
+window.addEventListener('keydown', e => keys[e.code] = true);
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+// 모바일 버튼 바인딩 함수
+function bindBtn(id, code) {
+    const el = document.getElementById(id);
+    el.addEventListener('touchstart', (e) => { e.preventDefault(); keys[code] = true; });
+    el.addEventListener('touchend', (e) => { e.preventDefault(); keys[code] = false; });
+    el.addEventListener('mousedown', () => keys[code] = true);
+    el.addEventListener('mouseup', () => keys[code] = false);
+}
+
+bindBtn('btn-fire-left', 'KeyA');
+bindBtn('btn-fire-up', 'KeyW');
+bindBtn('btn-fire-right', 'KeyD');
+bindBtn('btn-water-left', 'ArrowLeft');
+bindBtn('btn-water-up', 'ArrowUp');
+bindBtn('btn-water-right', 'ArrowRight');
+
+// 1스테이지 맵 데이터 (플랫폼 & 웅덩이 & 문)
+const platforms = [
+    // 바닥 및 외벽
+    { x: 0, y: 430, w: 800, h: 20 },
+    { x: 0, y: 0, w: 20, h: 450 },
+    { x: 780, y: 0, w: 20, h: 450 },
+    
+    // 층별 발판
+    { x: 20, y: 340, w: 320, h: 15 },
+    { x: 460, y: 340, w: 320, h: 15 },
+    
+    { x: 150, y: 250, w: 500, h: 15 },
+    
+    { x: 20, y: 150, w: 300, h: 15 },
+    { x: 480, y: 150, w: 300, h: 15 }
+];
+
+const pools = [
+    // type: 'fire', 'water', 'toxic'
+    { x: 140, y: 425, w: 100, h: 10, type: 'fire' },
+    { x: 560, y: 425, w: 100, h: 10, type: 'water' },
+    { x: 330, y: 245, w: 140, h: 10, type: 'toxic' }
+];
+
+const doors = {
+    fire: { x: 50, y: 90, w: 40, h: 60, reached: false },
+    water: { x: 710, y: 90, w: 40, h: 60, reached: false }
+};
+
+// 플레이어 클래스
+class Player {
+    constructor(x, y, color, type, controls) {
+        this.startX = x;
+        this.startY = y;
+        this.x = x;
+        this.y = y;
+        this.w = 24;
+        this.h = 32;
+        this.vx = 0;
+        this.vy = 0;
+        this.color = color;
+        this.type = type; // 'fire' or 'water'
+        this.controls = controls;
+        this.isGrounded = false;
+        this.speed = 3.5;
+        this.jumpPower = -10;
+    }
+
+    reset() {
+        this.x = this.startX;
+        this.y = this.startY;
+        this.vx = 0;
+        this.vy = 0;
+    }
+
+    update() {
+        // 이동
+        if (keys[this.controls.left]) this.vx = -this.speed;
+        else if (keys[this.controls.right]) this.vx = this.speed;
+        else this.vx = 0;
+
+        // 점프
+        if (keys[this.controls.up] && this.isGrounded) {
+            this.vy = this.jumpPower;
+            this.isGrounded = false;
+        }
+
+        // 중력 적용
+        this.vy += GRAVITY;
+
+        // X축 이동 & 충돌 처리
+        this.x += this.vx;
+        for (let p of platforms) {
+            if (checkRectOverlap(this, p)) {
+                if (this.vx > 0) this.x = p.x - this.w;
+                else if (this.vx < 0) this.x = p.x + p.w;
+            }
+        }
+
+        // Y축 이동 & 충돌 처리
+        this.y += this.vy;
+        this.isGrounded = false;
+        for (let p of platforms) {
+            if (checkRectOverlap(this, p)) {
+                if (this.vy > 0) { // 착지
+                    this.y = p.y - this.h;
+                    this.vy = 0;
+                    this.isGrounded = true;
+                } else if (this.vy < 0) { // 천장 충돌
+                    this.y = p.y + p.h;
+                    this.vy = 0;
+                }
+            }
+        }
+
+        // 웅덩이 사망 판정
+        for (let pool of pools) {
+            if (checkRectOverlap(this, pool)) {
+                if (pool.type === 'toxic') restartGame();
+                else if (pool.type === 'fire' && this.type === 'water') restartGame();
+                else if (pool.type === 'water' && this.type === 'fire') restartGame();
+            }
+        }
+
+        // 문 도달 여부
+        const door = doors[this.type];
+        if (checkRectOverlap(this, door)) {
+            door.reached = true;
+        } else {
+            door.reached = false;
+        }
+    }
+
+    draw() {
+        ctx.fillStyle = this.color;
+        ctx.fillRect(this.x, this.y, this.w, this.h);
+        
+        // 눈 그리기 (바라보는 방향)
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(this.x + (this.vx >= 0 ? 14 : 4), this.y + 6, 6, 6);
+    }
+}
+
+// 사각형 충돌 검사
+function checkRectOverlap(r1, r2) {
+    return r1.x < r2.x + r2.w &&
+           r1.x + r1.w > r2.x &&
+           r1.y < r2.y + r2.h &&
+           r1.y + r1.h > r2.y;
+}
+
+// 캐릭터 생성
+const playerFire = new Player(50, 390, '#ff4757', 'fire', { left: 'KeyA', right: 'KeyD', up: 'KeyW' });
+const playerWater = new Player(720, 390, '#1e90ff', 'water', { left: 'ArrowLeft', right: 'ArrowRight', up: 'ArrowUp' });
+
+function restartGame() {
+    playerFire.reset();
+    playerWater.reset();
+}
+
+// 루프 함수
+function gameLoop() {
+    // 1. 업데이트
+    playerFire.update();
+    playerWater.update();
+
+    // 2. 그려주기
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 문 그리기
+    for (let key in doors) {
+        const d = doors[key];
+        ctx.fillStyle = key === 'fire' ? '#8b0000' : '#00008b';
+        ctx.fillRect(d.x, d.y, d.w, d.h);
+        
+        // 문 장식 (도달하면 밝아짐)
+        ctx.fillStyle = d.reached ? '#55efc4' : (key === 'fire' ? '#ff7675' : '#74b9ff');
+        ctx.fillRect(d.x + 5, d.y + 5, d.w - 10, d.h - 10);
+    }
+
+    // 플랫폼 그리기
+    ctx.fillStyle = '#4b6584';
+    for (let p of platforms) {
+        ctx.fillRect(p.x, p.y, p.w, p.h);
+    }
+
+    // 웅덩이 그리기
+    for (let pool of pools) {
+        if (pool.type === 'fire') ctx.fillStyle = '#ff4757';
+        else if (pool.type === 'water') ctx.fillStyle = '#1e90ff';
+        else if (pool.type === 'toxic') ctx.fillStyle = '#2ed573';
+        ctx.fillRect(pool.x, pool.y, pool.w, pool.h);
+    }
+
+    // 캐릭터 그리기
+    playerFire.draw();
+    playerWater.draw();
+
+    // 스테이지 클리어 체크
+    if (doors.fire.reached && doors.water.reached) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.fillStyle = '#f1c40f';
+        ctx.font = 'bold 36px Segoe UI';
+        ctx.textAlign = 'center';
+        ctx.fillText('STAGE CLEAR!', canvas.width / 2, canvas.height / 2);
+        ctx.font = '18px Segoe UI';
+        ctx.fillStyle = '#fff';
+        ctx.fillText('축하합니다! 1스테이지를 클리어하셨습니다.', canvas.width / 2, canvas.height / 2 + 40);
+        return; // 루프 정지
+    }
+
+    requestAnimationFrame(gameLoop);
+}
+
+// 게임 시작
+gameLoop();
+</script>
+</body>
+</html>
